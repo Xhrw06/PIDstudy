@@ -13,6 +13,8 @@
 
 #define CENTER_ANGLE 1995
 #define CENTER_RANGE 500
+#define START_PWM 60
+#define START_TIME 120
 
 uint8_t KeyNum;
 uint8_t RunState;//PID工作状态
@@ -35,8 +37,8 @@ PID_t Location_PID =
 	.Kp = 0,
 	.Ki = 0,
 	.Kd = 0,
-	.OutMax = 50,
-	.OutMin = -50
+	.OutMax = 100,
+	.OutMin = -100
 };
 
 int main(void)
@@ -72,7 +74,15 @@ int main(void)
 		
 		if (KeyNum == 1)
 		{
-			RunState = !RunState;
+			if (RunState == 0)
+			{
+				RunState = 21;
+			}
+			else if (RunState == 4)
+			{
+				RunState = 0;
+			}
+			
 		}
 		if (RunState)
 		{
@@ -82,6 +92,8 @@ int main(void)
 		{
 			LED_OFF();
 		}
+		OLED_Printf(42,0,OLED_6X8,"%02d",RunState);
+
 		Location_PID.Kp = RP_GetValue(1) / 4095.0 * 1;
 		Location_PID.Ki = RP_GetValue(2) / 4095.0 * 1;
 		Location_PID.Kd = RP_GetValue(3) / 2048.0 * 1;
@@ -107,7 +119,8 @@ int main(void)
 
 void TIM1_UP_IRQHandler(void)
 {	
-	static uint8_t Count1,Count2;
+	static uint16_t Count0,Count1,Count2,CountTime;
+	static uint16_t Angle0,Angle1,Angle2;
 	if (TIM_GetITStatus(TIM1, TIM_IT_Update) == SET)
 	{
 		
@@ -117,14 +130,122 @@ void TIM1_UP_IRQHandler(void)
 		Angle_PID.Actual = Angle;
 		Location += Speed;
 		Location_PID.Actual = Location;
-		if (!(Angle > CENTER_ANGLE - CENTER_RANGE 
-			&& Angle < CENTER_ANGLE + CENTER_RANGE))
+		if (RunState == 0)
 		{
-			RunState = 0;
+			Angle_PID.ErrorInt = 0;
+			Location_PID.ErrorInt = 0;
+			Motor_SetPWM(0);
+		}
+		else if (RunState == 1)//判断摆杆位置，实现自动共振
+		{
+			Count0 ++;
+			if (Count0 >= 40)
+			{
+				Count0 = 0;
+				
+				Angle2 = Angle1;
+				Angle1 = Angle0;
+				Angle0 = Angle;
+				
+				if (Angle0 > CENTER_ANGLE + CENTER_RANGE
+				 && Angle1 > CENTER_ANGLE + CENTER_RANGE
+				 && Angle2 > CENTER_ANGLE + CENTER_RANGE
+				 && Angle1 < Angle0
+				 && Angle1 < Angle2)
+				{
+					RunState = 21;
+				}
+				if (Angle0 < CENTER_ANGLE - CENTER_RANGE
+				 && Angle1 < CENTER_ANGLE - CENTER_RANGE
+				 && Angle2 < CENTER_ANGLE - CENTER_RANGE
+				 && Angle1 > Angle0
+				 && Angle1 > Angle2)
+				{
+					RunState = 31;
+				}
+				if (Angle0 > CENTER_ANGLE - CENTER_RANGE + 200
+				 && Angle0 < CENTER_ANGLE + CENTER_RANGE - 200
+				 && Angle1 > CENTER_ANGLE - CENTER_RANGE + 200
+				 && Angle1 < CENTER_ANGLE + CENTER_RANGE - 200)
+				{
+					Location = 0;
+					Angle_PID.ErrorInt = 0;
+					Location_PID.ErrorInt = 0;
+					RunState = 4;
+				}
+			}
 		}
 
-		if (RunState)
+		//right
+		else if (RunState == 21)
 		{
+			Motor_SetPWM(START_PWM);
+			CountTime = START_TIME;
+			RunState = 22;
+		}
+		else if (RunState == 22)
+		{
+			CountTime --;
+			if (CountTime == 0)
+			{
+				RunState = 23;
+			}
+		}
+		else if (RunState == 23)
+		{
+			Motor_SetPWM(-START_PWM);
+			CountTime = START_TIME;
+			RunState = 24;
+		}
+		else if (RunState == 24)
+		{
+			CountTime --;
+			if (CountTime == 0)
+			{
+				Motor_SetPWM(0);
+				RunState = 1;
+			}
+		}
+
+		//left
+		else if (RunState == 31)
+		{
+			Motor_SetPWM(-START_PWM);
+			CountTime = START_TIME;
+			RunState = 32;
+		}
+		else if (RunState == 32)
+		{
+			CountTime --;
+			if (CountTime == 0)
+			{
+				RunState = 33;
+			}
+		}
+		else if (RunState == 33)
+		{
+			Motor_SetPWM(START_PWM);
+			CountTime = START_TIME;
+			RunState = 34;
+		}
+		else if (RunState == 34)
+		{
+			CountTime --;
+			if (CountTime == 0)
+			{
+				Motor_SetPWM(0);
+				RunState = 1;
+			}
+		}
+
+		
+		if (RunState == 4)
+		{
+			if (!(Angle > CENTER_ANGLE - CENTER_RANGE 
+			&& Angle < CENTER_ANGLE + CENTER_RANGE))
+			{
+			RunState = 0;
+			}
 			Count1 ++;
 			Count2 ++;
 			if (Count1 >= 5)
@@ -142,11 +263,6 @@ void TIM1_UP_IRQHandler(void)
 				Angle_PID.Target = CENTER_ANGLE - Location_PID.Out;
 			}
 		}
-		else
-		{
-			Motor_SetPWM(0);
-		}
-
 		TIM_ClearITPendingBit(TIM1, TIM_IT_Update);
 	}
 }
